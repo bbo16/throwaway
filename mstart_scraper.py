@@ -29,12 +29,12 @@ from bs4 import BeautifulSoup
 # Abgeleitet aus den Tab-Labels auf der Seite
 FUNCS = [
     'upcoming',        # Letzte / nächste Rennen
+    'timetable',       # Zeitplan mit Comp_Number (interne Race-ID)
     'races',           # Start-/Ergebnislisten (alle Rennen)
-    'startlist',       # Startliste eines Rennens (braucht race_id)
-    'results',         # Ergebnis eines Rennens (braucht race_id)
     'athletes',        # Athleten-Liste
     'clubs',           # Vereine
     'meldeergebnis',   # Meldeergebnis
+    # 'participants' wird pro Rennen mit id_race=Comp_Number abgefragt
 ]
 
 BASE_HEADERS = {
@@ -239,27 +239,26 @@ def scrape(page_url: str, headless: bool = True) -> dict:
                 data[func] = {'raw_html': html[:2000]}
                 print(f"? Unbekanntes Format ({len(html)} Zeichen)")
 
-    # 3. Falls races vorhanden: Detail-Ergebnisse pro Rennen holen
-    if 'races' in data and isinstance(data['races'], list):
-        race_ids = []
-        for race in data['races']:
-            # ID könnte in verschiedenen Feldern stehen
-            for key in ('id', 'race_id', 'Rennen', '#'):
-                if key in race and str(race[key]).isdigit():
-                    race_ids.append(str(race[key]))
-                    break
-
-        if race_ids:
-            print(f"\n{len(race_ids)} Rennen gefunden, lade Einzelergebnisse …")
-            data['race_results'] = {}
-            for race_id in race_ids[:50]:  # max 50 um nicht zu fluten
-                html = fetch_func(base_url, q, 'results',
-                                  extra_params={'race_id': race_id})
-                if html:
-                    parsed = try_json(html) or parse_html_table(html)
+    # 3. Teilnehmer/Ergebnisse pro Rennen via timetable → participants
+    timetable = data.get('timetable', [])
+    if isinstance(timetable, dict) and 'data' in timetable:
+        timetable = timetable['data']
+    if isinstance(timetable, list) and timetable:
+        comp_numbers = [str(r['Comp_Number']) for r in timetable
+                        if 'Comp_Number' in r and str(r['Comp_Number']).isdigit()]
+        if comp_numbers:
+            print(f"\n{len(comp_numbers)} Rennen im Zeitplan, lade Teilnehmer …")
+            data['participants'] = {}
+            for comp_nr in comp_numbers[:100]:
+                resp = fetch_func(base_url, q, 'participants',
+                                  extra_params={'id_race': comp_nr})
+                if resp:
+                    parsed = try_json(resp)
                     if parsed:
-                        data['race_results'][race_id] = parsed
-            print(f"✓ {len(data['race_results'])} Rennen-Ergebnisse geladen")
+                        entries = parsed if isinstance(parsed, list) else parsed.get('data', parsed)
+                        if entries:
+                            data['participants'][comp_nr] = entries
+            print(f"✓ {len(data['participants'])} Rennen mit Teilnehmerdaten geladen")
 
     return data
 
